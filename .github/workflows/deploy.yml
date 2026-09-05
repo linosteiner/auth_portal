@@ -1,4 +1,13 @@
-name: Build and Deploy
+name: Build and Promote
+
+# This pipeline does not deploy. It builds an image, publishes it, and writes the new
+# tag into the Ops repository -- ArgoCD is what moves the cluster, by reconciling against
+# that commit. Nothing here ever talks to the cluster.
+#
+# It replaces the previous ssh + docker compose job that deployed to a droplet. That path
+# is gone with the droplet, and an imperative deploy cannot coexist with a controller that
+# continuously reconciles the cluster against git: whatever ssh changed would be reverted
+# on the next sync.
 
 on:
   push:
@@ -7,8 +16,20 @@ on:
 permissions:
   contents: read
 
+# Promotion is a read-modify-write of a single line in a shared repo. Serialise the runs
+# so two builds of this repo cannot race each other into a push conflict.
+#
+# Note this only serialises runs of THIS repository -- GitHub scopes concurrency groups
+# per repo, so a backend promotion can still land between our checkout and our push.
+# That case is handled by the rebase-retry loop in the last step, not here.
+concurrency:
+  group: promote-ops
+  cancel-in-progress: false
+
 env:
   IMAGE_NAME: xxpirl2knc5/auth_portal
+  OPS_REPO: bernetlennard/user_mgmt_ops
+  VALUES_FILE: charts/user-mgmt/values.yaml
 
 jobs:
   build-and-push:
@@ -31,27 +52,95 @@ jobs:
         with:
           context: .
           push: true
+          # Next.js inlines NEXT_PUBLIC_* at build time, so the api endpoint is baked
+          # into the image and cannot be varied per environment from the Helm chart.
+          # Making it a runtime value is an app change, tracked separately.
           build-args: |
             NEXT_PUBLIC_API_URL=https://vcs.linosteiner.ch/api
+          # :latest is for user_mgmt_service/docker-compose.yaml, which is still the
+          # local dev path. The cluster only ever references the immutable SHA tag.
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  deploy:
+  promote:
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read  # the Ops repo is written with OPS_REPO_TOKEN, not GITHUB_TOKEN
     steps:
-      - name: Deploy to droplet
-        uses: appleboy/ssh-action@v1.2.5
+      # The Ops repo lives under a different owner, so the built-in GITHUB_TOKEN cannot
+      # write to it. OPS_REPO_TOKEN is a fine-grained PAT scoped to that one repo,
+      # Contents: read and write.
+      - name: Checkout Ops repository
+        uses: actions/checkout@v7
         with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USERNAME }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          script: |
-            set -e
-            cd ${{ secrets.DEPLOY_PATH }}
-            docker compose pull auth-portal
-            docker compose up -d auth-portal
-            docker image prune -f
+          repository: ${{ env.OPS_REPO }}
+          ref: main
+          token: ${{ secrets.OPS_REPO_TOKEN }}
+          path: ops
+
+      # Deliberately sed and not yq. values.yaml carries the comments that explain the
+      # chart, and yq rewrites the whole document: it injects a blank line into every
+      # multi-line comment block and reflows flow-style collections
+      # ({ port: 8080 } -> {port: 8080}). This substitution is anchored to the frontend
+      # block, where `    tag: ` at four spaces is unique to frontend.image.tag.
+      - name: Rewrite frontend image tag
+        id: rewrite
+        working-directory: ops
+        run: |
+          sed -i -E '/^frontend:/,/^[a-z]/ s|^(    tag: ).*$|\1"'"$GITHUB_SHA"'"|' "$VALUES_FILE"
+
+          # Re-running a build for an already promoted commit is a no-op, not a failure.
+          if git diff --quiet -- "$VALUES_FILE"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already promoted to $GITHUB_SHA -- nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # If the substitution ever stops matching, or starts matching too much, that must
+      # be a red build and not a silently mangled chart. The backend block sits above
+      # frontend and uses the same four-space `tag: ` key, so a range that widened would
+      # show up here as two changed lines instead of one.
+      - name: Verify exactly one line changed
+        if: steps.rewrite.outputs.changed == 'true'
+        working-directory: ops
+        run: |
+          numstat=$(git diff --numstat -- "$VALUES_FILE" | tr '\t' ' ')
+          echo "$numstat"
+          if [ "$numstat" != "1 1 $VALUES_FILE" ]; then
+            echo "::error::Expected exactly one changed line in $VALUES_FILE, got: '$numstat'"
+            git diff -- "$VALUES_FILE"
+            exit 1
+          fi
+          grep -q "tag: \"$GITHUB_SHA\"" "$VALUES_FILE"
+
+      - name: Commit and push promotion
+        if: steps.rewrite.outputs.changed == 'true'
+        working-directory: ops
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$VALUES_FILE"
+          git commit -F - <<EOF
+          Promote frontend to ${GITHUB_SHA:0:7}
+
+          Automated promotion from $GITHUB_REPOSITORY@$GITHUB_SHA
+          $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+
+          # A human commit, or a backend promotion, landing between our checkout and our
+          # push must not fail the promotion -- rebase onto it and try again.
+          for attempt in 1 2 3; do
+            if git push origin main; then
+              echo "Promoted on attempt $attempt."
+              exit 0
+            fi
+            echo "Push rejected, rebasing (attempt $attempt)..."
+            git pull --rebase origin main
+          done
+          echo "::error::Could not push the promotion after 3 attempts."
+          exit 1
