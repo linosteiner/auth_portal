@@ -1,4 +1,5 @@
 import { cookies } from "next/headers"
+import { backendUrl } from "@/lib/backend"
 
 export async function GET() {
   const token = (await cookies()).get("jwt")?.value
@@ -7,7 +8,7 @@ export async function GET() {
     return Response.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/me`, {
+  const res = await fetch(backendUrl("/users/me"), {
     method: "GET",
     headers: {
       Authorization: `Bearer ${token}`,

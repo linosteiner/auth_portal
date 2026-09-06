@@ -7,8 +7,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN corepack enable pnpm && pnpm install --frozen-lockfile
 
 FROM base AS builder
-ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# No NEXT_PUBLIC_API_URL build arg any more. Next.js inlines NEXT_PUBLIC_* into the bundle
+# at build time, which baked one environment's api endpoint into the image and made every
+# environment's frontend talk to prod. The address is resolved at runtime instead: client
+# components call a relative /api path, and the server-side route handlers read
+# BACKEND_API_URL from the frontend ConfigMap. The image is environment-agnostic.
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

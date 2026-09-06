@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server"
+import { backendUrl } from "@/lib/backend"
 
 export async function POST(req: Request) {
   try {
     const body = await req.json()
 
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/login`, {
+    const res = await fetch(backendUrl("/users/login"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -39,6 +40,10 @@ export async function POST(req: Request) {
 
     return response
   } catch (err) {
+    // Without this the caller only ever sees "Server error" and the pod logs stay silent,
+    // which makes a misconfigured BACKEND_API_URL practically undiagnosable.
+    console.error("login route failed:", err)
+
     return NextResponse.json(
         { message: "Server error" },
         { status: 500 }

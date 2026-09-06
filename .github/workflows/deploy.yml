@@ -52,11 +52,9 @@ jobs:
         with:
           context: .
           push: true
-          # Next.js inlines NEXT_PUBLIC_* at build time, so the api endpoint is baked
-          # into the image and cannot be varied per environment from the Helm chart.
-          # Making it a runtime value is an app change, tracked separately.
-          build-args: |
-            NEXT_PUBLIC_API_URL=https://vcs.linosteiner.ch/api
+          # No build args: the image is environment-agnostic. The api address is resolved
+          # at runtime (relative /api in the browser, BACKEND_API_URL from the frontend
+          # ConfigMap on the server), so the same image runs in staging and in prod.
           # :latest is for user_mgmt_service/docker-compose.yaml, which is still the
           # local dev path. The cluster only ever references the immutable SHA tag.
           tags: |
