@@ -1,3 +1,5 @@
+import {cookies} from "next/headers"
+
 /**
  * Base url of the backend, for SERVER-SIDE calls only -- the route handlers under
  * app/auth/ that run inside the frontend pod.
@@ -23,4 +25,36 @@ export function backendUrl(path: string): string {
     }
 
     return `${base}${path}`
+}
+
+/**
+ * Calls the backend on behalf of the logged-in user and hands its answer back unchanged:
+ * status, JSON body and Retry-After (the backend sends one with every 503). For the route
+ * handlers that only relay a call. The jwt cookie is httpOnly, so the browser cannot attach
+ * the token itself.
+ */
+export async function forwardToBackend(path: string, method: "GET" | "PUT" = "GET"): Promise<Response> {
+    const token = (await cookies()).get("jwt")?.value
+
+    if (!token) {
+        return Response.json({error: "Unauthorized"}, {status: 401})
+    }
+
+    try {
+        const res = await fetch(backendUrl(path), {
+            method,
+            headers: {Authorization: `Bearer ${token}`},
+            cache: "no-store",
+        })
+        const headers = new Headers()
+        const retryAfter = res.headers.get("retry-after")
+        if (retryAfter) headers.set("Retry-After", retryAfter)
+        const body = await res.text()
+        if (body) headers.set("Content-Type", "application/json")
+
+        return new Response(body || null, {status: res.status, headers})
+    } catch (err) {
+        console.error(`${method} ${path} failed:`, err)
+        return Response.json({error: "Backend not reachable"}, {status: 502})
+    }
 }

@@ -1,102 +1,34 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
+import {usePathname} from "next/navigation"
+import {BookOpen, GraduationCap, LayoutDashboard} from "lucide-react"
 
-import { NavMain } from "@/components/dashboard/nav-main"
-import { NavProjects } from "@/components/dashboard/nav-projects"
-import { NavSecondary } from "@/components/dashboard/nav-secondary"
-import { NavUser } from "@/components/dashboard/nav-user"
+import {useCurrentUser} from "@/components/dashboard/current-user"
+import {NavUser} from "@/components/dashboard/nav-user"
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { ComputerTerminalIcon, RoboticIcon, BookOpen02Icon, Settings05Icon, ChartRingIcon, SentIcon, CropIcon, PieChartIcon, MapsIcon, CommandIcon, SunIcon } from "@hugeicons/core-free-icons"
-import {User} from "@/models/user";
 
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  const [user, setUser] = React.useState<User | null>(null)
+// Every entry leads to a real page. The shadcn template's placeholders (Playground, Projects,
+// Support, ...) pointed at "#" and did nothing when clicked.
+const navigation = [
+  {title: "Overview", url: "/dashboard", icon: LayoutDashboard},
+  {title: "Modules", url: "/dashboard/modules", icon: BookOpen},
+]
 
-  React.useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const res = await fetch("/auth/me", {
-          method: "GET",
-          credentials: "include",
-        })
-
-        if (!res.ok) throw new Error("Failed to load user")
-
-        const data = await res.json()
-        setUser(data)
-      } catch (err) {
-        console.error(err)
-      }
-    }
-
-    fetchUser()
-  }, [])
-
-  const data = {
-    user: {
-      name: user?.firstName + " " + user?.lastName || "",
-      email: user?.email || "",
-      avatar: "/avatars/shadcn.jpg"
-    },
-    navMain: [
-      {
-        title: "Playground",
-        url: "#",
-        icon: (
-            <HugeiconsIcon icon={ComputerTerminalIcon} strokeWidth={2} />
-        ),
-        isActive: true,
-        items: [
-          {
-            title: "History",
-            url: "#",
-          }
-        ],
-      }
-    ],
-    navSecondary: [
-      {
-        title: "Support",
-        url: "#",
-        icon: (
-            <HugeiconsIcon icon={ChartRingIcon} strokeWidth={2} />
-        ),
-      },
-      {
-        title: "Feedback",
-        url: "#",
-        icon: (
-            <HugeiconsIcon icon={SentIcon} strokeWidth={2} />
-        ),
-      }
-    ],
-    projects: [
-      {
-        name: "Prompt Engineering",
-        url: "#",
-        icon: (
-            <HugeiconsIcon icon={CropIcon} strokeWidth={2} />
-        ),
-      },
-      {
-        name: "Sales & Marketing",
-        url: "#",
-        icon: (
-            <HugeiconsIcon icon={PieChartIcon} strokeWidth={2} />
-        ),
-      }
-    ],
-  }
+export function AppSidebar({...props}: React.ComponentProps<typeof Sidebar>) {
+  const user = useCurrentUser()
+  const pathname = usePathname()
 
   return (
     <Sidebar variant="inset" {...props}>
@@ -104,26 +36,43 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
-              <a href="#">
+              <Link href="/dashboard">
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                  <HugeiconsIcon icon={CommandIcon} strokeWidth={2} className="size-4" />
+                  <GraduationCap className="size-4"/>
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">Lorem Inc</span>
-                  <span className="truncate text-xs">Enterprise</span>
+                  <span className="truncate font-medium">User Management</span>
+                  <span className="truncate text-xs">Modules for users</span>
                 </div>
-              </a>
+              </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <NavMain items={data.navMain} />
-        <NavProjects projects={data.projects} />
-        <NavSecondary items={data.navSecondary} className="mt-auto" />
+        <SidebarGroup>
+          <SidebarGroupLabel>Platform</SidebarGroupLabel>
+          <SidebarMenu>
+            {navigation.map((item) => (
+              <SidebarMenuItem key={item.url}>
+                <SidebarMenuButton asChild tooltip={item.title} isActive={pathname === item.url}>
+                  <Link href={item.url}>
+                    <item.icon/>
+                    <span>{item.title}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser
+          user={{
+            name: user ? `${user.firstName} ${user.lastName}` : "",
+            email: user?.email ?? "",
+          }}
+        />
       </SidebarFooter>
     </Sidebar>
   )
